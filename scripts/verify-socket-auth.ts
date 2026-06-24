@@ -33,7 +33,9 @@ async function main() {
 
   let connectedUserId: string | undefined;
   io.on("connection", (socket) => {
-    connectedUserId = socket.user?.id;
+    // The auth middleware stores the principal on socket.data.user (see
+    // src/socket/events.ts) — not socket.user.
+    connectedUserId = socket.data.user?.id;
   });
 
   await new Promise<void>((r) => server.listen(0, r));
