@@ -1,0 +1,139 @@
+// Real-time phone number bidding system
+// Prisma schema — PostgreSQL
+//
+// Money fields use Decimal(14,2) — never Float.
+// All entities use uuid() ids.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+enum PhoneType {
+  PREPAID
+  POSTPAID
+}
+
+enum AuctionStatus {
+  SCHEDULED // created, startsAt in the future
+  ACTIVE    // between startsAt and endsAt, accepting bids
+  ENDED     // endsAt reached, winner resolved (or no bids)
+  CANCELLED // pulled by an admin before/while active
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String // bcrypt hash — never the plaintext
+  name      String
+  role      Role     @default(MEMBER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bids          Bid[]
+  watches       AuctionWatch[]
+  refreshTokens RefreshToken[]
+
+  @@index([role])
+}
+
+// Persisted refresh tokens enable rotation + revocation.
+// Access tokens stay stateless (JWT only); refresh tokens are checked here.
+model RefreshToken {
+  id        String    @id @default(uuid())
+  token     String    @unique // store a hash of the refresh token, not the raw value
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model PhoneNumber {
+  id        String    @id @default(uuid())
+  msisdn    String    @unique // full international number, digits only
+  type      PhoneType
+  category  String // e.g. "GOLD", "PLATINUM", "VIP" — free-form for now
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  auctions Auction[] // a number may be re-auctioned over time
+
+  @@index([category])
+}
+
+model Auction {
+  id            String        @id @default(uuid())
+  phoneNumberId String
+  phoneNumber   PhoneNumber   @relation(fields: [phoneNumberId], references: [id])
+  floorPrice    Decimal       @db.Decimal(14, 2) // minimum acceptable bid (admin-set)
+  currentPrice  Decimal       @db.Decimal(14, 2) // denormalized: highest accepted bid, or floorPrice if none
+  startsAt      DateTime
+  endsAt        DateTime
+  status        AuctionStatus @default(SCHEDULED)
+
+  // Winning bid, resolved when the auction closes. One-to-one back to Bid.
+  winnerBidId String? @unique
+  winnerBid   Bid?    @relation("AuctionWinner", fields: [winnerBidId], references: [id])
+
+  bids Bid[] @relation("AuctionBids")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  watches AuctionWatch[]
+
+  // Background close job queries ACTIVE auctions whose endsAt has passed.
+  @@index([status, endsAt])
+  @@index([phoneNumberId])
+}
+
+model Bid {
+  id        String   @id @default(uuid())
+  auctionId String
+  auction   Auction  @relation("AuctionBids", fields: [auctionId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  amount    Decimal  @db.Decimal(14, 2)
+  bidAt     DateTime @default(now())
+
+  // Inverse side of Auction.winnerBid. Set only on the winning bid.
+  wonAuction Auction? @relation("AuctionWinner")
+
+  // Sorted lookups for "current top bid" and per-user bid history.
+  @@index([auctionId, amount])
+  @@index([auctionId, bidAt])
+  @@index([userId])
+}
+
+// Maps 1:1 to a socket.io room. A user watching an auction page = a row here.
+model AuctionWatch {
+  id        String   @id @default(uuid())
+  auctionId String
+  auction   Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt  DateTime @default(now())
+
+  @@unique([auctionId, userId])
+  @@index([userId])
+}

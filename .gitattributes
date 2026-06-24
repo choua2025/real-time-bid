@@ -1,0 +1,4 @@
+# Keep shell scripts LF so they run inside Linux containers regardless of the
+# host OS that committed them.
+*.sh text eol=lf
+docker-entrypoint.sh text eol=lf
