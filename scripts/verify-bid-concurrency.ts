@@ -38,8 +38,15 @@ async function main() {
     users.map((u) => bidService.place({ auctionId: auction.id, userId: u.id, amount: "150.00" })),
   );
   const acceptedA = sameAmount.filter((r) => r.status === "fulfilled").length;
-  const outbidA = sameAmount.filter(
-    (r) => r.status === "rejected" && isBidError(r.reason) && r.reason.code === "OUTBID",
+  // Both OUTBID (lost the atomic updateMany race) and NOT_HIGHER (the winner had
+  // already committed currentPrice=150 before this bid even read the auction) are
+  // correct rejections of an equal bid. Which one a given loser hits is pure
+  // timing, so count either as a valid "too low" rejection.
+  const rejectedTooLowA = sameAmount.filter(
+    (r) =>
+      r.status === "rejected" &&
+      isBidError(r.reason) &&
+      (r.reason.code === "OUTBID" || r.reason.code === "NOT_HIGHER"),
   ).length;
   // Diagnostic: tally why the non-accepted bids were rejected.
   const reasonsA: Record<string, number> = {};
@@ -67,7 +74,7 @@ async function main() {
   // --- report -------------------------------------------------------------
   console.log("\n=== Scenario A: 20 simultaneous identical bids of 150.00 ===");
   console.log(`  accepted: ${acceptedA} (expect exactly 1)`);
-  console.log(`  rejected OUTBID: ${outbidA} (expect 19)`);
+  console.log(`  rejected (OUTBID or NOT_HIGHER): ${rejectedTooLowA} (expect 19)`);
 
   console.log("\n=== Scenario B: 20 simultaneous distinct bids 200..219 ===");
   console.log(`  accepted: ${acceptedB} (expect 1..20, all valid increases)`);
@@ -78,7 +85,7 @@ async function main() {
 
   const pass =
     acceptedA === 1 &&
-    outbidA === N - 1 &&
+    rejectedTooLowA === N - 1 &&
     finalAuction.currentPrice.toFixed(2) === "219.00" &&
     totalBids === acceptedA + acceptedB;
   console.log(`\nRESULT: ${pass ? "PASS ✅" : "FAIL ❌"}`);
