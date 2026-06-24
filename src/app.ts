@@ -21,7 +21,7 @@ export function createApp(): Express {
   app.use(express.json({ limit: "100kb" }));
 
   app.get("/health", (_req, res) => {
-    res.json({ ok: true });
+    res.json({ ok: true, });
   });
 
   app.use("/api", apiLimiter, apiRouter);
